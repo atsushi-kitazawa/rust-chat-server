@@ -1,41 +1,54 @@
 use std::{
-    collections::{HashMap},
+    collections::HashMap,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     str,
-    sync::{Arc, Mutex},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc, Mutex,
+    },
     thread,
 };
 
 const ADDRESS: &str = "127.0.0.1:8888";
 
 fn main() {
-    let room = Arc::new(Mutex::new(HashMap::<String, TcpStream>::new()));
+    // map to hold per-client streams
+    let clients = Arc::new(Mutex::new(HashMap::<String, TcpStream>::new()));
+
+    // create channel
+    let (tx, tr): (Sender<String>, Receiver<String>) = mpsc::channel();
+
+    // broadcast thread start
+    thread::spawn(move || loop {
+        println!("message wait...");
+        let msg = tr.recv().unwrap();
+        print!("received message {}", msg)
+    });
 
     let listner = TcpListener::bind(ADDRESS).expect("failed bind");
     for stream in listner.incoming() {
         let mut stream = stream.unwrap();
-        room.try_lock().unwrap().insert(
+        clients.try_lock().unwrap().insert(
             stream.peer_addr().unwrap().to_string(),
             stream.try_clone().expect("failed clone stream"),
         );
         // println!("{:?}", room);
 
         // request hander per client
-        let room_ref = room.clone();
+        let clients_ref = clients.clone();
+        let tx_ref = mpsc::Sender::clone(&tx);
         thread::spawn(move || {
-            handle_connection(&mut stream);
-            room_ref
+            handle_connection(&mut stream, tx_ref);
+            clients_ref
                 .try_lock()
                 .unwrap()
                 .remove(&stream.peer_addr().unwrap().to_string());
         });
-
-        // broadcast thread start
     }
 }
 
-fn handle_connection(stream: &mut TcpStream) {
+fn handle_connection(stream: &mut TcpStream, tx: Sender<String>) {
     let client_address = stream.peer_addr().unwrap().to_string();
     loop {
         let mut buf = [0; 512];
@@ -47,12 +60,15 @@ fn handle_connection(stream: &mut TcpStream) {
                     // receive ctrl + c or ctrl + ]
                     break;
                 } else {
+                    let s = String::from_utf8_lossy(&buf[..]);
                     println!(
                         "request({}) {}, {:?}",
                         client_address,
-                        String::from_utf8_lossy(&buf[..]),
+                        &s,
                         buf
                     );
+                    tx.send(s.to_string()).unwrap();
+                    println!("send message {}", &s);
                 }
             }
             Result::Err(_) => {
