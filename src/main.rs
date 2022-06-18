@@ -19,12 +19,9 @@ fn main() {
     // create channel
     let (tx, tr): (Sender<String>, Receiver<String>) = mpsc::channel();
 
-    // broadcast thread start
-    thread::spawn(move || loop {
-        println!("message wait...");
-        let msg = tr.recv().unwrap();
-        print!("received message {}", msg)
-    });
+    // broadcast
+    let cliens_ref_for_broadcast = clients.clone();
+    thread::spawn(move || broadcast(tr, cliens_ref_for_broadcast));
 
     let listner = TcpListener::bind(ADDRESS).expect("failed bind");
     for stream in listner.incoming() {
@@ -61,14 +58,9 @@ fn handle_connection(stream: &mut TcpStream, tx: Sender<String>) {
                     break;
                 } else {
                     let s = String::from_utf8_lossy(&buf[..]);
-                    println!(
-                        "request({}) {}, {:?}",
-                        client_address,
-                        &s,
-                        buf
-                    );
+                    println!("request({}) {} {:?}", client_address, &s, buf);
                     tx.send(s.to_string()).unwrap();
-                    println!("send message {}", &s);
+                    print!("send message {}", &s);
                 }
             }
             Result::Err(_) => {
@@ -77,8 +69,21 @@ fn handle_connection(stream: &mut TcpStream, tx: Sender<String>) {
         }
 
         // todo (invalid utf8 data error handling)
+        // and move to "match ret Result Ok"
         let reply = String::from("hello ") + str::from_utf8(&buf).unwrap();
         stream.write(reply.as_bytes()).unwrap();
         stream.flush().unwrap();
+    }
+}
+
+fn broadcast(tr: Receiver<String>, clients_ref: Arc<Mutex<HashMap<String, TcpStream>>>) {
+    loop {
+        println!("waiting receive message....");
+        let msg = tr.recv().unwrap();
+        println!("received msg {}", msg);
+        for stream in clients_ref.try_lock().unwrap().values_mut() {
+            stream.write(msg.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        }
     }
 }
