@@ -19,6 +19,9 @@ fn main() {
             stream.peer_addr().unwrap().to_string(),
             stream.try_clone().expect("failed clone stream"),
         );
+        // println!("{:?}", room);
+
+        // request hander per client
         let room_ref = room.clone();
         thread::spawn(move || {
             handle_connection(&mut stream);
@@ -27,7 +30,8 @@ fn main() {
                 .unwrap()
                 .remove(&stream.peer_addr().unwrap().to_string());
         });
-        println!("{:?}", room);
+
+        // broadcast thread start
     }
 }
 
@@ -55,6 +59,8 @@ fn handle_connection(stream: &mut TcpStream) {
                 println!("handle_connection() read error");
             }
         }
+
+        // todo (invalid utf8 data error handling)
         let reply = String::from("hello ") + str::from_utf8(&buf).unwrap();
         stream.write(reply.as_bytes()).unwrap();
         stream.flush().unwrap();
