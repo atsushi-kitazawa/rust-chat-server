@@ -1,35 +1,60 @@
 use std::{
+    collections::{HashMap},
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    thread,
     str,
+    sync::{Arc, Mutex},
+    thread,
 };
 
-fn main() {
-    let result = TcpListener::bind("127.0.0.1:8888");
+const ADDRESS: &str = "127.0.0.1:8888";
 
-    match result {
-        Result::Ok(listner) => {
-            for stream in listner.incoming() {
-                let stream = stream.unwrap();
-                thread::spawn(|| {
-                    handle_connection(stream);
-                });
-            }
-        }
-        Result::Err(_e) => {
-            println!("NG: bind()")
-        }
+fn main() {
+    let room = Arc::new(Mutex::new(HashMap::<String, TcpStream>::new()));
+
+    let listner = TcpListener::bind(ADDRESS).expect("failed bind");
+    for stream in listner.incoming() {
+        let mut stream = stream.unwrap();
+        room.try_lock().unwrap().insert(
+            stream.peer_addr().unwrap().to_string(),
+            stream.try_clone().expect("failed clone stream"),
+        );
+        let room_ref = room.clone();
+        thread::spawn(move || {
+            handle_connection(&mut stream);
+            room_ref
+                .try_lock()
+                .unwrap()
+                .remove(&stream.peer_addr().unwrap().to_string());
+        });
+        println!("{:?}", room);
     }
 }
 
-fn handle_connection(mut stream: TcpStream) {
-    let client_address = stream.peer_addr().unwrap();
+fn handle_connection(stream: &mut TcpStream) {
+    let client_address = stream.peer_addr().unwrap().to_string();
     loop {
         let mut buf = [0; 512];
-        stream.read(&mut buf).unwrap();
-        println!("request({}) {}", client_address, String::from_utf8_lossy(&buf[..]));
-
+        let ret = stream.read(&mut buf);
+        match ret {
+            Result::Ok(size) => {
+                println!("size={}", size);
+                if buf[0] == 255 || size == 0 {
+                    // receive ctrl + c or ctrl + ]
+                    break;
+                } else {
+                    println!(
+                        "request({}) {}, {:?}",
+                        client_address,
+                        String::from_utf8_lossy(&buf[..]),
+                        buf
+                    );
+                }
+            }
+            Result::Err(_) => {
+                println!("handle_connection() read error");
+            }
+        }
         let reply = String::from("hello ") + str::from_utf8(&buf).unwrap();
         stream.write(reply.as_bytes()).unwrap();
         stream.flush().unwrap();
