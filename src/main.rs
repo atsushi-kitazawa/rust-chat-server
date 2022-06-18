@@ -26,61 +26,60 @@ fn main() {
     let listner = TcpListener::bind(ADDRESS).expect("failed bind");
     for stream in listner.incoming() {
         let mut stream = stream.unwrap();
+        let client_addr = stream.peer_addr().unwrap().to_string();
+        println!("joined {}", client_addr);
         clients.try_lock().unwrap().insert(
-            stream.peer_addr().unwrap().to_string(),
+            client_addr,
             stream.try_clone().expect("failed clone stream"),
         );
-        // println!("{:?}", room);
+        
+        // print client list
+        println!("clients {:?}", clients.try_lock().unwrap().keys());
 
         // request hander per client
         let clients_ref = clients.clone();
         let tx_ref = mpsc::Sender::clone(&tx);
         thread::spawn(move || {
             handle_connection(&mut stream, tx_ref);
+            let leave_client = &stream.peer_addr().unwrap().to_string();
             clients_ref
                 .try_lock()
                 .unwrap()
-                .remove(&stream.peer_addr().unwrap().to_string());
+                .remove(leave_client);
+            println!("leaved {}", leave_client);
         });
     }
 }
 
 fn handle_connection(stream: &mut TcpStream, tx: Sender<String>) {
-    let client_address = stream.peer_addr().unwrap().to_string();
     loop {
         let mut buf = [0; 512];
         let ret = stream.read(&mut buf);
         match ret {
             Result::Ok(size) => {
-                println!("size={}", size);
+                println!("msg size={}", size);
                 if buf[0] == 255 || size == 0 {
                     // receive ctrl + c or ctrl + ]
                     break;
                 } else {
                     let s = String::from_utf8_lossy(&buf[..]);
-                    println!("request({}) {} {:?}", client_address, &s, buf);
-                    tx.send(s.to_string()).unwrap();
-                    print!("send message {}", &s);
+                    // let client_address = stream.peer_addr().unwrap().to_string();
+                    // println!("request({}) {} {:?}", client_address, &s, buf);
+
+                    let client_address = stream.peer_addr().unwrap().to_string();
+                    tx.send(format!("({}):{}", client_address, s.to_string())).unwrap();
                 }
             }
             Result::Err(_) => {
                 println!("handle_connection() read error");
             }
         }
-
-        // todo (invalid utf8 data error handling)
-        // and move to "match ret Result Ok"
-        let reply = String::from("hello ") + str::from_utf8(&buf).unwrap();
-        stream.write(reply.as_bytes()).unwrap();
-        stream.flush().unwrap();
     }
 }
 
 fn broadcast(tr: Receiver<String>, clients_ref: Arc<Mutex<HashMap<String, TcpStream>>>) {
     loop {
-        println!("waiting receive message....");
         let msg = tr.recv().unwrap();
-        println!("received msg {}", msg);
         for stream in clients_ref.try_lock().unwrap().values_mut() {
             stream.write(msg.as_bytes()).unwrap();
             stream.flush().unwrap();
